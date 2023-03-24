@@ -1,4 +1,6 @@
 import logging
+import os
+import requests
 
 
 def log_set(Log_level=logging.INFO):
@@ -9,3 +11,10 @@ def log_set(Log_level=logging.INFO):
     ch.setLevel(Log_level)
     ch.setFormatter(formatter)
     logger.addHandler(ch)
+
+
+def download_img(url, save_path="./"):
+    if os.path.isdir(save_path):
+        save_path = os.path.join(save_path, "img.png")
+    with open(save_path, "wb") as f:
+        f.write(requests.get(url).content)
