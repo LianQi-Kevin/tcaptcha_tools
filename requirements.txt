@@ -1,4 +1,4 @@
 selenium
 selenium-wire
-opencv-python
 webdriver_manager
+pillow

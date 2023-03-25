@@ -37,8 +37,6 @@ def set_driver(headless_mode: bool = True) -> webdriver.Chrome:
     user_agent = random.choice(AgentsList)
     logging.debug("User agent: {}".format(user_agent))
     # options.add_argument("user-agent={}".format(user_agent))
-    # fix auto controller tag
-    options.add_argument("disable-infobars")
     # headless
     if headless_mode:
         logging.info("Use headless mode")

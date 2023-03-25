@@ -1,69 +1,82 @@
+import io
 import logging
 import os
 import time
-import base64
-import json
+import shutil
 import urllib.parse
+
+import PIL
 import requests
 
+from PIL import Image
 # from selenium import webdriver
 from seleniumwire import webdriver
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from typing import Tuple
 
 from utils.utils import log_set
-from utils.selenium_tools import set_driver, web_wait, check_element_exists
+from utils.selenium_tools import set_driver, web_wait
 
 
-def get_tcaptcha_img(driver: webdriver, img_save_path: str = None):
-    bg_img, notch_img, uncropped_img = None, None, None
-    if img_save_path is not None:
-        assert os.path.isdir(img_save_path), f"{img_save_path} not a dir"
-        os.makedirs(img_save_path, exist_ok=True)
+def crop_tcaptcha(uncropped_img: bytes, corp_area: tuple) -> PIL.Image:
+    """
+    * 使用Image.open()读取二进制数据并剪切图像
+    :param uncropped_img: 二进制图片
+    :param corp_area: 截取缺口图片的区域, (x1, y1, x2, y2)
+    :return: cropped img, PIL.Image
+    """
+    return Image.open(io.BytesIO(uncropped_img)).crop(corp_area)
+
+
+def save_tcaptcha_img(img_index: str, img_url: str, save_path: str = "tcaptcha_img") -> Tuple[str, bytes]:
+    """
+    * 下载tcaptcha图片并保存
+    :param img_index: 图片的编号
+    :param img_url: img url path
+    :param save_path: 保存tcaptcha图片的文件夹
+    :returns: 存储的路径, 二进制img对象
+    """
+    img_name = {"0": "uncropped", "1": "background", "2": "notch"}
+    logging.info(f"{img_name[img_index]} img url: {img_url}")
+    img = requests.get(img_url).content
+    img_path = os.path.join(save_path, f"{img_name[img_index]}.png")
+    with open(img_path, "wb") as f:
+        logging.info(f"Save {img_name[img_index]} image to {img_path}")
+        f.write(img)
+    return img_path, img
+
+
+def get_tcaptcha_img(driver: webdriver, cache_path: str = "tcaptcha_img"):
+    """
+    * 获取iframe内的背景图和缺口图
+    """
+    background_path, notch_path, uncropped_path = None, None, None
+    # get url and download
     for request in driver.requests:
-        if request.response and request.response.headers['Content-Type'] != "application/json" and request.headers['Sec-Fetch-Dest'] == "image" and "t.captcha.qq.com" in request.url:
-            query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(request.url).query))
-            # ---- basic msg ----
-            print("Url:", request.url)
-            print("Code:", request.response.status_code)
-            print("Content-Type:", request.response.headers['Content-Type'])
-            print("Sec-Fetch-Dest:", request.headers['Sec-Fetch-Dest'])
-            print("Img_index:", query['img_index'])
-            # ---- basic msg ----
+        if request.response and request.response.headers['Content-Type'] != "application/json" and request.headers[
+            'Sec-Fetch-Dest'] == "image" and "t.captcha.qq.com" in request.url:
+            query: dict = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(request.url).query))
             if query["img_index"] == "1":
-                logging.info("Background img url: {}".format(request.url))
-                bg_img = requests.get(request.url).content
-                if img_save_path is not None:
-                    save_path = os.path.join(img_save_path, "background.png")
-                    with open(save_path, "wb") as f:
-                        logging.info("Save background image to {}".format(save_path))
-                        f.write(bg_img)
+                background_path, background_img = save_tcaptcha_img(query["img_index"], request.url, cache_path)
             elif query["img_index"] == "2":
-                logging.info("Notch img url: {}".format(request.url))
-                notch_img = requests.get(request.url).content
-                if img_save_path is not None:
-                    save_path = os.path.join(img_save_path, "notch.png")
-                    with open(save_path, "wb") as f:
-                        logging.info("Save notch image to {}".format(save_path))
-                        f.write(notch_img)
+                notch_path, notch_img = save_tcaptcha_img(query["img_index"], request.url, cache_path)
             elif query["img_index"] == "0":
-                logging.info("Uncropped notch img url: {}".format(request.url))
-                uncropped_img = requests.get(request.url).content
-                if img_save_path is not None:
-                    save_path = os.path.join(img_save_path, "uncropped.png")
-                    with open(save_path, "wb") as f:
-                        logging.info("Save notch image to {}".format(save_path))
-                        f.write(uncropped_img)
+                uncropped_path, uncropped_img = save_tcaptcha_img(query["img_index"], request.url, cache_path)
+                notch_img = crop_tcaptcha(uncropped_img, corp_area=(140, 490, 260, 610))
+                notch_path = os.path.join(cache_path, "notch.png")
+                logging.info(f"Save notch image to {notch_path}")
+                notch_img.save(notch_path)
             else:
                 logging.error("Tcaptcha image not found, ERROR!")
-                exit()
-    return bg_img, notch_img
+                raise Exception("Tcaptcha image not found, ERROR!")
+    return background_path, notch_path, uncropped_path
 
 
-# 打开tcaptcha官网并打开iframe
-def open_tcaptcha(captcha_mode: str = "体验用户") -> webdriver.Chrome:
+def open_tcaptcha(captcha_mode: str = "体验用户") -> webdriver:
     """
-    :param captcha_mode: ["体验用户", "可疑用户", "恶意用户"]
+    * 打开tcaptcha官网并打开iframe
+    :param captcha_mode: ["体验用户", "可疑用户"]
     """
     # set driver
     driver = set_driver(headless_mode=False)
@@ -82,33 +95,46 @@ def open_tcaptcha(captcha_mode: str = "体验用户") -> webdriver.Chrome:
     return driver
 
 
+def get_tcaptcha_iframe(driver: webdriver) -> webdriver:
+    """
+    * 从browser中寻找tcaptcha iframe并切换到iframe内
+    """
+    web_wait(driver, By.CSS_SELECTOR, "iframe[id*='tcaptcha']", 20)
+    driver.switch_to.frame(driver.find_element(By.CSS_SELECTOR, "iframe[id*='tcaptcha']"))
+    time.sleep(3)
+    logging.info("Successful go into tcaptcha iframe")
+    return driver
+
+
+def tcaptcha(driver: webdriver, clean_up: bool = True) -> webdriver:
+    """
+    * 在driver内寻找tcaptcha iframe, 并基于图鉴进行打码
+    :param driver: webdriver
+    :param clean_up: 是否在执行结束后删除tcaptcha图片缓存文件夹
+    """
+    # basic var
+    cache_path = "./tcaptcha_img"
+    os.makedirs(cache_path, exist_ok=True)
+    # switch to tcaptcha iframe
+    driver = get_tcaptcha_iframe(driver)
+    # save tcaptcha img
+    background_path, notch_path, _ = get_tcaptcha_img(driver, cache_path)
+    print(background_path, notch_path)
+    # get ttshitu result
+
+    # clean up
+    if clean_up:
+        shutil.rmtree(cache_path, ignore_errors=True)
+    driver.switch_to.default_content()
+    return driver
+
+
 if __name__ == '__main__':
     # set logging
     log_set(Log_level=logging.INFO)
 
     # init and go site
-    # browser = open_tcaptcha(captcha_mode="体验用户")
-    browser = open_tcaptcha(captcha_mode="可疑用户")
-
-    # switch to tcaptcha iframe
-    web_wait(browser, By.CSS_SELECTOR, "iframe[id*='tcaptcha']", 20)
-    browser.switch_to.frame(browser.find_element(By.CSS_SELECTOR, "iframe[id*='tcaptcha']"))
-    # web_wait(browser, By.CSS_SELECTOR, "div[id='slideBgWrap']", 20)
-    time.sleep(3)
-    logging.info("Successful go into tcaptcha iframe")
-
-    # ---- save sourcecode -----
-    # time.sleep(30)
-    # source_code = browser.page_source
-    # source_code = browser.execute_script("return document.body.innerHTML;")
-    # logging.info("Write source code to test.html")
-    # with open("test.html", "w") as html_f:
-    #     html_f.write(source_code)
-    # ---- save sourcecode -----
-
-    get_tcaptcha_img(browser, img_save_path="./tcaptcha_img")
-
-    # do out of frame
-    browser.switch_to.default_content()
-
-    browser.close()  # time.sleep(999)
+    for mode in ["体验用户", "可疑用户"]:
+        browser = open_tcaptcha(captcha_mode=mode)
+        browser = tcaptcha(browser, False)
+        browser.quit()
