@@ -1,9 +1,11 @@
+import base64
 import io
 import logging
 import os
 import time
 import shutil
 import urllib.parse
+import json
 
 import PIL
 import requests
@@ -73,6 +75,17 @@ def get_tcaptcha_img(driver: webdriver, cache_path: str = "tcaptcha_img"):
     return background_path, notch_path, uncropped_path
 
 
+def get_tcaptcha_iframe(driver: webdriver) -> webdriver:
+    """
+    * 从browser中寻找tcaptcha iframe并切换到iframe内
+    """
+    web_wait(driver, By.CSS_SELECTOR, "iframe[id*='tcaptcha']", 20)
+    driver.switch_to.frame(driver.find_element(By.CSS_SELECTOR, "iframe[id*='tcaptcha']"))
+    time.sleep(3)
+    logging.info("Successful go into tcaptcha iframe")
+    return driver
+
+
 def open_tcaptcha(captcha_mode: str = "体验用户") -> webdriver:
     """
     * 打开tcaptcha官网并打开iframe
@@ -95,20 +108,38 @@ def open_tcaptcha(captcha_mode: str = "体验用户") -> webdriver:
     return driver
 
 
-def get_tcaptcha_iframe(driver: webdriver) -> webdriver:
+def img2b64(img_path: str) -> str:
     """
-    * 从browser中寻找tcaptcha iframe并切换到iframe内
+    * 从图片路径加载文件并转换到base64字串
     """
-    web_wait(driver, By.CSS_SELECTOR, "iframe[id*='tcaptcha']", 20)
-    driver.switch_to.frame(driver.find_element(By.CSS_SELECTOR, "iframe[id*='tcaptcha']"))
-    time.sleep(3)
-    logging.info("Successful go into tcaptcha iframe")
-    return driver
+    with open(img_path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
 
 
-def tcaptcha(driver: webdriver, clean_up: bool = True) -> webdriver:
+def get_ttshitu_result(background_path: str, notch_path: str, ttshitu_uname: str, ttshitu_pwd: str) -> str:
+    """
+    * 读取背景图和缺口图并使用图鉴API打码
+    :param background_path: background img path
+    :param notch_path: notch img path
+    :param ttshitu_uname: ttshitu username
+    :param ttshitu_pwd: ttshitu password
+    :return: ttshitu result
+    """
+    bg_b64 = img2b64(background_path)
+    nc_b64 = img2b64(notch_path)
+    data = {"username": ttshitu_uname, "password": ttshitu_pwd, "typeid": 18, "image": nc_b64, "imageback": bg_b64}
+    result = json.loads(requests.post("https://api.ttshitu.com/predict", json=data).text)
+    if result['success']:
+        return result["data"]["result"]
+    else:
+        return result["message"]
+
+
+def tcaptcha(driver: webdriver, ttshitu_uname: str, ttshitu_pwd: str, clean_up: bool = True) -> webdriver:
     """
     * 在driver内寻找tcaptcha iframe, 并基于图鉴进行打码
+    :param ttshitu_uname: ttshitu username
+    :param ttshitu_pwd: ttshitu password
     :param driver: webdriver
     :param clean_up: 是否在执行结束后删除tcaptcha图片缓存文件夹
     """
@@ -119,8 +150,9 @@ def tcaptcha(driver: webdriver, clean_up: bool = True) -> webdriver:
     driver = get_tcaptcha_iframe(driver)
     # save tcaptcha img
     background_path, notch_path, _ = get_tcaptcha_img(driver, cache_path)
-    print(background_path, notch_path)
     # get ttshitu result
+    ttshitu_result = get_ttshitu_result(background_path, notch_path, ttshitu_uname, ttshitu_pwd)
+    print(ttshitu_result.split(","))    # ['434', '113']
 
     # clean up
     if clean_up:
@@ -131,10 +163,14 @@ def tcaptcha(driver: webdriver, clean_up: bool = True) -> webdriver:
 
 if __name__ == '__main__':
     # set logging
-    log_set(Log_level=logging.INFO)
+    # log_set(Log_level=logging.INFO)
+
+    # set ttshitu(http://www.ttshitu.com/?spm=null)
+    username = "图鉴用户名"
+    pwd = "图鉴密码"
 
     # init and go site
     for mode in ["体验用户", "可疑用户"]:
         browser = open_tcaptcha(captcha_mode=mode)
-        browser = tcaptcha(browser, False)
+        browser = tcaptcha(browser, clean_up=False, ttshitu_uname=username, ttshitu_pwd=pwd)
         browser.quit()
