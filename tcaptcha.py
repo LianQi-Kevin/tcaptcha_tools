@@ -6,6 +6,7 @@ import time
 import shutil
 import urllib.parse
 import json
+import re
 
 import PIL
 import requests
@@ -18,7 +19,7 @@ from selenium.webdriver.common.by import By
 from typing import Tuple
 
 from utils.utils import log_set
-from utils.selenium_tools import set_driver, web_wait
+from utils.selenium_tools import set_driver, web_wait, check_element_exists
 
 
 def crop_tcaptcha(uncropped_img: bytes, corp_area: tuple) -> PIL.Image:
@@ -49,7 +50,7 @@ def save_tcaptcha_img(img_index: str, img_url: str, save_path: str = "tcaptcha_i
     return img_path, img
 
 
-def get_tcaptcha_img(driver: webdriver, cache_path: str = "tcaptcha_img"):
+def get_tcaptcha_img(driver: webdriver, cache_path: str = "tcaptcha_img") -> Tuple[str, str, str]:
     """
     * 获取iframe内的背景图和缺口图
     """
@@ -75,7 +76,7 @@ def get_tcaptcha_img(driver: webdriver, cache_path: str = "tcaptcha_img"):
     return background_path, notch_path, uncropped_path
 
 
-def get_tcaptcha_iframe(driver: webdriver) -> webdriver:
+def get_tcaptcha_iframe(driver: webdriver, cache_path: str) -> webdriver:
     """
     * 从browser中寻找tcaptcha iframe并切换到iframe内
     """
@@ -83,16 +84,20 @@ def get_tcaptcha_iframe(driver: webdriver) -> webdriver:
     driver.switch_to.frame(driver.find_element(By.CSS_SELECTOR, "iframe[id*='tcaptcha']"))
     time.sleep(3)
     logging.info("Successful go into tcaptcha iframe")
+    with open(os.path.join(cache_path, "iframe_sourcecode.html"), "w") as html_f:
+        logging.info(f"Save iframe source code to {os.path.join(cache_path, 'iframe_sourcecode.html')}")
+        html_f.write(re.sub(re.compile(r"<(script|style).*?</(script|style)>"), "", driver.execute_script("return document.documentElement.innerHTML;")))
     return driver
 
 
-def open_tcaptcha(captcha_mode: str = "体验用户") -> webdriver:
+def open_tcaptcha(captcha_mode: str = "体验用户", headless: bool = False) -> webdriver:
     """
     * 打开tcaptcha官网并打开iframe
+    :param headless: 是否以无头模式打开浏览器
     :param captcha_mode: ["体验用户", "可疑用户"]
     """
     # set driver
-    driver = set_driver(headless_mode=False)
+    driver = set_driver(headless_mode=headless)
 
     # go site
     tcaptcha_url = "https://007.qq.com/"  # 腾讯防水墙官网
@@ -135,6 +140,10 @@ def get_ttshitu_result(background_path: str, notch_path: str, ttshitu_uname: str
         return result["message"]
 
 
+def move_tcaptcha_button(driver: webdriver, x_offset: int) -> webdriver:
+    move_button = driver.find_element(By.CSS_SELECTOR, "")
+
+
 def tcaptcha(driver: webdriver, ttshitu_uname: str, ttshitu_pwd: str, clean_up: bool = True) -> webdriver:
     """
     * 在driver内寻找tcaptcha iframe, 并基于图鉴进行打码
@@ -147,13 +156,16 @@ def tcaptcha(driver: webdriver, ttshitu_uname: str, ttshitu_pwd: str, clean_up: 
     cache_path = "./tcaptcha_img"
     os.makedirs(cache_path, exist_ok=True)
     # switch to tcaptcha iframe
-    driver = get_tcaptcha_iframe(driver)
+    driver = get_tcaptcha_iframe(driver, cache_path)
     # save tcaptcha img
     background_path, notch_path, _ = get_tcaptcha_img(driver, cache_path)
     # get ttshitu result
     ttshitu_result = get_ttshitu_result(background_path, notch_path, ttshitu_uname, ttshitu_pwd)
-    print(ttshitu_result.split(","))    # ['434', '113']
-
+    x_offset = int(ttshitu_result.split(",")[0]) - 35
+    logging.info(f"Actual X offset: {x_offset}")
+    # print(check_element_exists(driver, "div[id='tcOperation']", By.CSS_SELECTOR))
+    # move button
+    # move_tcaptcha_button(driver, x_offset)
     # clean up
     if clean_up:
         shutil.rmtree(cache_path, ignore_errors=True)
@@ -163,7 +175,7 @@ def tcaptcha(driver: webdriver, ttshitu_uname: str, ttshitu_pwd: str, clean_up: 
 
 if __name__ == '__main__':
     # set logging
-    # log_set(Log_level=logging.INFO)
+    log_set(Log_level=logging.INFO)
 
     # set ttshitu(http://www.ttshitu.com/?spm=null)
     username = "图鉴用户名"
@@ -171,6 +183,6 @@ if __name__ == '__main__':
 
     # init and go site
     for mode in ["体验用户", "可疑用户"]:
-        browser = open_tcaptcha(captcha_mode=mode)
+        browser = open_tcaptcha(captcha_mode=mode, headless=True)
         browser = tcaptcha(browser, clean_up=False, ttshitu_uname=username, ttshitu_pwd=pwd)
         browser.quit()
