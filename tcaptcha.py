@@ -18,7 +18,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from typing import Tuple
 
-from utils.utils import log_set
+from utils.logging_utils import log_set
 from utils.selenium_tools import set_driver, web_wait, check_element_exists
 
 
@@ -175,7 +175,7 @@ def tcaptcha(driver: webdriver, ttshitu_uname: str, ttshitu_pwd: str, clean_up: 
 
 if __name__ == '__main__':
     # set logging
-    log_set(Log_level=logging.INFO)
+    log_set(log_level=logging.INFO, log_save=False)
 
     # set ttshitu(http://www.ttshitu.com/?spm=null)
     username = "图鉴用户名"
